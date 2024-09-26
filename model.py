@@ -1,12 +1,17 @@
 # Implementation: https://www.kaggle.com/code/chekoduadarsh/pytorch-beginner-code-faster-rcnn
 # Modified slightly for my usecase
 
+from pathlib import Path
+import sys
+from typing import Optional, Union, Any
 import pandas as pd
 import numpy as np
 import cv2
+import json
 import os
 import re
 import pydicom
+import time
 import warnings
 
 from PIL import Image
@@ -25,247 +30,189 @@ from torchvision.models.detection.rpn import AnchorGenerator
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.sampler import SequentialSampler
 
-from matplotlib import pyplot as plt
+from torchmetrics.detection.mean_ap import MeanAveragePrecision
+
 import random
-paddingSize= 0
+paddingSize = 0
 
 warnings.filterwarnings("ignore")
 
 
-DIR_INPUT = '/kaggle/input/vinbigdata-chest-xray-abnormalities-detection'
+SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/finetuning")
+run_id = sys.argv[1]
+
+DIR_INPUT = '/data/courses/2024/class_ImageSummerFall2024_jliang12/vinbigdata'
 DIR_TRAIN = f'{DIR_INPUT}/train'
 DIR_TEST = f'{DIR_INPUT}/test'
 
 
 train_df = pd.read_csv(f'{DIR_INPUT}/train.csv')
 train_df.fillna(0, inplace=True)
-train_df.loc[train_df["class_id"] == 14, ['x_max', 'y_max']] = 1.0
+train_df.loc[train_df["class_id"] == 14, ['x_max', 'y_max']] = 1.0  # TODO: undertstand why?
 
-# FasterRCNN handles class_id==0 as the background.
+# FasterRCNN handles class_id==0 as the background, but we have 14 as our class label for background .
 train_df["class_id"] = train_df["class_id"] + 1
 train_df.loc[train_df["class_id"] == 15, ["class_id"]] = 0
 
 print("df Shape: "+str(train_df.shape))
 print("No Of Classes: "+str(train_df["class_id"].nunique()))
-train_df.sort_values(by='image_id').head(10)
+train_df.sort_values(by='image_id').head(10)  # TODO: is it being shuffled later?
 
 
-def label_to_name(id):
-    id = int(id)
-    id = id-1
-    if id == 0:
-        return "Aortic enlargement"
-    if id == 1:
-        return "Atelectasis"
-    if id == 2:
-        return "Calcification"
-    if id == 3:
-        return "Cardiomegaly"
-    if id == 4:
-        return "Consolidation"
-    if id == 5:
-        return "ILD"
-    if id == 6:
-        return "Infiltration"
-    if id == 7:
-        return "Lung Opacity"
-    if id == 8:
-        return "Nodule/Mass"
-    if id == 9:
-        return "Other lesion"
-    if id == 10:
-        return "Pleural effusion"
-    if id == 11:
-        return "Pleural thickening"
-    if id == 12:
-        return "Pneumothorax"
-    if id == 13:
-        return "Pulmonary fibrosis"
-    else:
-        return str(id)
-
-image_ids = train_df['image_id'].unique()
-valid_ids = image_ids[-10000:]# Tran and Validation Split
-train_ids = image_ids[:-10000]
+def label_to_name(id: int) -> str:
+  labels: dict[int, str] = {
+      0: "Aortic enlargement",
+      1: "Atelectasis",
+      2: "Calcification",
+      3: "Cardiomegaly",
+      4: "Consolidation",
+      5: "ILD",
+      6: "Infiltration",
+      7: "Lung Opacity",
+      8: "Nodule/Mass",
+      9: "Other lesion",
+      10: "Pleural effusion",
+      11: "Pleural thickening",
+      12: "Pneumothorax",
+      13: "Pulmonary fibrosis"
+  }
+  return labels.get(id - 1, str(id))
 
 
-valid_df = train_df[train_df['image_id'].isin(valid_ids)]
+image_ids: np.ndarray = train_df['image_id'].unique()
+np.random.shuffle(image_ids)  # Shuffle the image IDs
+TRAIN_SIZE = int(0.8*len(image_ids))
+train_ids: np.ndarray = image_ids[:TRAIN_SIZE]  # Training split
+valid_ids: np.ndarray = image_ids[TRAIN_SIZE:]  # Validation split
 train_df = train_df[train_df['image_id'].isin(train_ids)]
-
-train_df["class_id"] = train_df["class_id"].apply(lambda x: x+1)
-valid_df["class_id"] = valid_df["class_id"].apply(lambda x: x+1)
-
-train_df.shape
-
-
-#Clean
-
-train_df['area'] = (train_df['x_max'] - train_df['x_min']) * (train_df['y_max'] - train_df['y_min'])
-valid_df['area'] = (valid_df['x_max'] - valid_df['x_min']) * (valid_df['y_max'] - valid_df['y_min'])
-train_df = train_df[train_df['area'] > 1]
-valid_df = valid_df[valid_df['area'] > 1]
-
-train_df = train_df[(train_df['class_id'] > 1) & (train_df['class_id'] < 15)]
-valid_df = valid_df[(valid_df['class_id'] > 1) & (valid_df['class_id'] < 15)]
-
-
-train_df = train_df.drop(['area'], axis = 1)
-train_df.shape
-
+valid_df = train_df[train_df['image_id'].isin(valid_ids)]
+print('Num of training samples:', len(train_df))
+print('Num of validation samples:', len(valid_df))
 
 # Thanks -  https://www.kaggle.com/pestipeti/
-class VinBigDataset(Dataset): #Class to load Training Data
-
-    def __init__(self, dataframe, image_dir, transforms=None,stat = 'Train'):
-        super().__init__()
-
-        self.image_ids = dataframe["image_id"].unique()
-        self.df = dataframe
-        self.image_dir = image_dir
-        self.transforms = transforms
-        self.stat = stat
-
-    def __getitem__(self, index):
-        if self.stat == 'Train':
-
-            image_id = self.image_ids[index]
-            records = self.df[(self.df['image_id'] == image_id)]
-            records = records.reset_index(drop=True)
-
-            dicom = pydicom.dcmread(f"{self.image_dir}/{image_id}.dicom")
-
-            image = dicom.pixel_array
-
-            if "PhotometricInterpretation" in dicom:
-                if dicom.PhotometricInterpretation == "MONOCHROME1":
-                    image = np.amax(image) - image
-
-            intercept = dicom.RescaleIntercept if "RescaleIntercept" in dicom else 0.0
-            slope = dicom.RescaleSlope if "RescaleSlope" in dicom else 1.0
-
-            if slope != 1:
-                image = slope * image.astype(np.float64)
-                image = image.astype(np.int16)
+DS_ITEM_TYPE = tuple[torch.Tensor, torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor]
 
 
-            image += np.int16(intercept)
+class VinBigDataset(Dataset):  # type: ignore
+  def __init__(self, dataframe: pd.DataFrame, image_dir: str, transforms: Optional[Any] = None, stat: str = 'Train') -> None:
+    super().__init__()
+    self.image_ids = dataframe["image_id"].unique()
+    self.df = dataframe
+    self.image_dir = image_dir
+    self.transforms = transforms
+    self.stat = stat
 
-            image = np.stack([image, image, image])
-            image = image.astype('float32')
-            image = image - image.min()
-            image = image / image.max()
-            image = image * 255.0
-            image = image.transpose(1,2,0)
+  def __getitem__(self, index: int) -> DS_ITEM_TYPE:
+    image_id = self.image_ids[index]
+    records = self.df[(self.df['image_id'] == image_id)]
+    records = records.reset_index(drop=True)
+    dicom = pydicom.dcmread(f"{self.image_dir}/{image_id}.dicom")
+    image = dicom.pixel_array
 
-            if records.loc[0, "class_id"] == 0:
-                records = records.loc[[0], :]
+    # Photometric interpretation in DICOM images refers to the relationship between the pixel values and the actual intensity of the image.
+    # It describes how the pixel values are related to the physical property being measured.
+    # The `MONOCHROME1` tag indicates the image is stored with pixel values representing the minimum intensity (i.e., darker pixels have lower values).
+    # This code inverts the image to represent pixel values as maximum intensity (i.e., darker pixels have higher values). `MONOCHROME2`
+    if "PhotometricInterpretation" in dicom:
+      if dicom.PhotometricInterpretation == "MONOCHROME1":
+        image = np.amax(image) - image
 
-            boxes = records[['x_min', 'y_min', 'x_max', 'y_max']].values
-            area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
-            area = torch.as_tensor(area, dtype=torch.float32)
-            labels = torch.tensor(records["class_id"].values, dtype=torch.int64)
+    # rescale and normalize to range [0, 255]
+    slope = dicom.RescaleSlope if "RescaleSlope" in dicom else 1.0
+    intercept = dicom.RescaleIntercept if "RescaleIntercept" in dicom else 0.0
+    image = (image.astype(np.float32) * slope) + intercept  # y = mx + c
+    image = (image - image.min()) / (image.max() - image.min()) * 255
+    image = np.stack([image, image, image])
+    image = image.transpose(1, 2, 0).astype(np.uint8)
 
-            # suppose all instances are not crowd
-            iscrowd = torch.zeros((records.shape[0],), dtype=torch.int64)
+    if self.stat == 'Train':
+      # TODO: check by deleting this
+      if records.loc[0, "class_id"] == 0:
+        records = records.loc[[0], :]
 
-            target = {}
-            target['boxes'] = boxes
-            target['labels'] = labels
-            target['image_id'] = torch.tensor([index])
-            target['area'] = area
-            target['iscrowd'] = iscrowd
+      boxes = records[['x_min', 'y_min', 'x_max', 'y_max']].values
+      area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
+      area = torch.as_tensor(area, dtype=torch.float32)
+      labels = torch.tensor(records["class_id"].values, dtype=torch.int64)
 
-            if self.transforms:
-                sample = {
-                    'image': image,
-                    'bboxes': target['boxes'],
-                    'labels': labels
-                }
-                sample = self.transforms(**sample)
-                image = sample['image']
+      # assume there is no crowd
+      iscrowd = torch.zeros((records.shape[0],), dtype=torch.int64)
 
-                target['boxes'] = torch.tensor(sample['bboxes'])
+      target = {}
+      target['boxes'] = boxes
+      target['labels'] = labels
+      target['image_id'] = torch.tensor([index])
+      target['area'] = area
+      target['iscrowd'] = iscrowd
 
-            if target["boxes"].shape[0] == 0:
-                # Albumentation cuts the target (class 14, 1x1px in the corner)
-                target["boxes"] = torch.from_numpy(np.array([[0.0, 0.0, 1.0, 1.0]]))
-                target["area"] = torch.tensor([1.0], dtype=torch.float32)
-                target["labels"] = torch.tensor([0], dtype=torch.int64)
+      if self.transforms:
+        sample = {
+            'image': image,
+            'bboxes': target['boxes'],
+            'labels': labels
+        }
+        sample = self.transforms(**sample)
+        image = sample['image']
 
-            return image, target, image_ids
+        target['boxes'] = torch.tensor(sample['bboxes'])
 
-        else:
+      if target["boxes"].shape[0] == 0:
+        # Albumentation cuts the target (class 14, 1x1px in the corner)
+        target["boxes"] = torch.from_numpy(np.array([[0.0, 0.0, 1.0, 1.0]]))
+        target["area"] = torch.tensor([1.0], dtype=torch.float32)
+        target["labels"] = torch.tensor([0], dtype=torch.int64)
 
-            image_id = self.image_ids[index]
-            records = self.df[(self.df['image_id'] == image_id)]
-            records = records.reset_index(drop=True)
+      return image, target, image_ids
 
-            dicom = pydicom.dcmread(f"{self.image_dir}/{image_id}.dicom")
+    else:
+      if self.transforms:
+        sample = {
+            'image': image,
+        }
+        sample = self.transforms(**sample)
+        image = sample['image']
 
-            image = dicom.pixel_array
+      return image, image_id
 
-            intercept = dicom.RescaleIntercept if "RescaleIntercept" in dicom else 0.0
-            slope = dicom.RescaleSlope if "RescaleSlope" in dicom else 1.0
-
-            if slope != 1:
-                image = slope * image.astype(np.float64)
-                image = image.astype(np.int16)
-
-            image += np.int16(intercept)
-
-            image = np.stack([image, image, image])
-            image = image.astype('float32')
-            image = image - image.min()
-            image = image / image.max()
-            image = image * 255.0
-            image = image.transpose(1,2,0)
-
-            if self.transforms:
-                sample = {
-                    'image': image,
-                }
-                sample = self.transforms(**sample)
-                image = sample['image']
-
-            return image, image_id
-
-    def __len__(self):
-        return self.image_ids.shape[0]
+  def __len__(self) -> int:
+    return int(self.image_ids.shape[0])
 
 
-def dilation(img): # custom image processing function
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, tuple(np.random.randint(1, 6, 2)))
-    img = cv2.dilate(img, kernel, iterations=1)
-    return img
+def dilation(img: np.array) -> np.array:  # custom image processing function
+  kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, tuple(np.random.randint(1, 6, 2)))
+  img = cv2.dilate(img, kernel, iterations=1)
+  return img
 
-class Dilation(ImageOnlyTransform):
-    def apply(self, img, **params):
-        return dilation(img)
+
+class Dilation(ImageOnlyTransform):  # type: ignore
+  def apply(self, img: np.array, **params) -> np.array: return dilation(img)  # type: ignore
 
 
 # Albumentations
-def get_train_transform():
-    return A.Compose([
-        A.Flip(0.5),
-        A.ShiftScaleRotate(scale_limit=0.1, rotate_limit=45, p=0.25),
-        A.LongestMaxSize(max_size=800, p=1.0),
-        Dilation(),
-        # FasterRCNN will normalize.
-        A.Normalize(mean=(0, 0, 0), std=(1, 1, 1), max_pixel_value=255.0, p=1.0),
-        ToTensorV2(p=1.0)
-    ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
+def get_train_transform() -> A:
+  return A.Compose([
+      A.Flip(0.5),
+      A.ShiftScaleRotate(scale_limit=0.1, rotate_limit=45, p=0.25),
+      A.LongestMaxSize(max_size=800, p=1.0),
+      Dilation(),
+      # FasterRCNN will normalize.
+      A.Normalize(mean=(0, 0, 0), std=(1, 1, 1), max_pixel_value=255.0, p=1.0),
+      ToTensorV2(p=1.0)
+  ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
 
-def get_valid_transform():
-    return A.Compose([
-        A.Normalize(mean=(0, 0, 0), std=(1, 1, 1), max_pixel_value=255.0, p=1.0),
-        ToTensorV2(p=1.0)
-    ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
 
-def get_test_transform():
-    return A.Compose([
-        A.Normalize(mean=(0, 0, 0), std=(1, 1, 1), max_pixel_value=255.0, p=1.0),
-        ToTensorV2(p=1.0)
-    ])
+def get_valid_transform() -> A:
+  return A.Compose([
+      A.Normalize(mean=(0, 0, 0), std=(1, 1, 1), max_pixel_value=255.0, p=1.0),
+      ToTensorV2(p=1.0)
+  ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
+
+
+def get_test_transform() -> A:
+  return A.Compose([
+      A.Normalize(mean=(0, 0, 0), std=(1, 1, 1), max_pixel_value=255.0, p=1.0),
+      ToTensorV2(p=1.0)
+  ])
 
 
 # ===
@@ -273,7 +220,7 @@ def get_test_transform():
 # ===
 
 model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
-num_classes = 15 # 14 Classes + 1 background
+num_classes = 15  # 14 Classes + 1 background
 
 # get number of input features for the classifier
 in_features = model.roi_heads.box_predictor.cls_score.in_features
@@ -282,8 +229,10 @@ in_features = model.roi_heads.box_predictor.cls_score.in_features
 model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-def collate_fn(batch):
-    return tuple(zip(*batch))
+
+def collate_fn(batch: DS_ITEM_TYPE) -> tuple[DS_ITEM_TYPE]:
+  return tuple(zip(*batch))
+
 
 train_dataset = VinBigDataset(train_df, DIR_TRAIN, get_train_transform())
 valid_dataset = VinBigDataset(valid_df, DIR_TRAIN, get_valid_transform())
@@ -313,40 +262,26 @@ images, targets, image_ids = next(iter(train_data_loader))
 images = list(image.to(device) for image in images)
 targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-for number in random.sample([1,2,3],3):
-  boxes = targets[number]['boxes'].cpu().numpy().astype(np.int32)
-  img = images[number].permute(1,2,0).cpu().numpy()
-  labels= targets[number]['labels'].cpu().numpy().astype(np.int32)
-  fig, ax = plt.subplots(1, 1, figsize=(16, 8))
-
-  for i in range(len(boxes)):
-      img = cv2.rectangle(img,(boxes[i][0]+paddingSize,boxes[i][1]+paddingSize),(boxes[i][2]+paddingSize,boxes[i][3]+paddingSize),(255,0,0),2)
-      #print(le.inverse_transform([labels[i]-1])[0])
-      #print(label_to_name(labels[i]), (int(boxes[i][0]), int(boxes[i][1])))
-      img = cv2.putText(img, label_to_name(labels[i]), (int(boxes[i][0]), int(boxes[i][1])), cv2.FONT_HERSHEY_TRIPLEX,1, (255,0,0), 2, cv2.LINE_AA)
-
-  ax.set_axis_off()
-  ax.imshow(img)
 
 class Averager:
-    def __init__(self):
-        self.current_total = 0.0
-        self.iterations = 0.0
+  def __init__(self) -> None:
+    self.current_total = 0.0
+    self.iterations = 0.0
 
-    def send(self, value):
-        self.current_total += value
-        self.iterations += 1
+  def send(self, value: float) -> None:
+    self.current_total += value
+    self.iterations += 1
 
-    @property
-    def value(self):
-        if self.iterations == 0:
-            return 0
-        else:
-            return 1.0 * self.current_total / self.iterations
+  @property
+  def value(self) -> float:
+    if self.iterations == 0:
+      return 0.0
+    else:
+      return 1.0 * self.current_total / self.iterations
 
-    def reset(self):
-        self.current_total = 0.0
-        self.iterations = 0.0
+  def reset(self) -> None:
+    self.current_total = 0.0
+    self.iterations = 0.0
 
 
 model.to(device)
@@ -354,91 +289,95 @@ params = [p for p in model.parameters() if p.requires_grad]
 optimizer = torch.optim.SGD(params, lr=0.005, momentum=0.9, weight_decay=0.0005)
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.1)
 
-num_epochs =  2 #Low epoch to save GPU time
+num_epochs = 2  # Low epoch to save GPU time
+
+
+# Validation function
+def validate_model(model: torch.nn.Module, valid_data_loader: DataLoader) -> tuple[float, float, float]:
+  model.eval()
+  val_loss_hist = Averager()
+  val_metric = MeanAveragePrecision()
+
+  with torch.no_grad():
+    for images, targets, image_ids in valid_data_loader:
+      images = list(image.to(device) for image in images)
+      targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+      loss_dict = model(images, targets)
+      outputs = model(images)
+      val_metric.update(outputs, targets)
+
+      losses = sum(loss for loss in loss_dict.values())
+      loss_value = losses.item()
+      val_loss_hist.send(loss_value)
+
+  eval_metrics = val_metric.compute()
+  val_map = eval_metrics['map'].item()
+  val_iou = eval_metrics['map_50'].item()
+
+  return val_loss_hist.value, val_map, val_iou
 
 
 loss_hist = Averager()
-itr = 1
-lossHistoryiter = []
-lossHistoryepoch = []
-
-import time
+train_loss_history = []
+val_loss_history = []
+val_map_history = []
+val_iou_history = []
 start = time.time()
 
 for epoch in range(num_epochs):
-    loss_hist.reset()
+  print(f"Epoch {epoch+1}/{num_epochs}")
 
-    for images, targets, image_ids in train_data_loader:
+  # Validate model at the start of each epoch
+  val_loss, val_map, val_iou = validate_model(model, valid_data_loader)
+  val_loss_history.append(val_loss)
+  val_map_history.append(val_map)
+  val_iou_history.append(val_iou)
 
-        images = list(image.to(device) for image in images)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+  # Train loop
+  model.train()
+  loss_hist.reset()
 
-        loss_dict = model(images, targets)
+  for images, targets, image_ids in train_data_loader:
+    images = list(image.to(device) for image in images)
+    targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        losses = sum(loss for loss in loss_dict.values())
-        loss_value = losses.item()
+    loss_dict = model(images, targets)
 
-        loss_hist.send(loss_value)
-        lossHistoryiter.append(loss_value)
-        optimizer.zero_grad()
-        losses.backward()
-        optimizer.step()
+    losses = sum(loss for loss in loss_dict.values())
+    loss_value = losses.item()
+    loss_hist.send(loss_value)
 
-        if itr % 50 == 0:
-            print(f"Iteration #{itr} loss: {loss_value}")
+    optimizer.zero_grad()
+    losses.backward()
+    optimizer.step()
 
-        itr += 1
+  # Save the training metrics
+  train_loss_history.append(loss_hist.value)
 
-    # update the learning rate
-    if lr_scheduler is not None:
-        lr_scheduler.step()
-    lossHistoryepoch.append(loss_hist.value)
-    print(f"Epoch #{epoch} loss: {loss_hist.value}")
+  # Update the learning rate
+  if lr_scheduler is not None:
+    lr_scheduler.step()
+
+  print(f"Train Loss: {loss_hist.value: .4f}")
+  print(f"Val Loss: {val_loss: .4f}, Val mAP: {val_map: .4f}, Val IoU: {val_iou: .4f}")
 
 end = time.time()
-hours, rem = divmod(end-start, 3600)
-minutes, seconds = divmod(rem, 60)
-print("Time taken to Train the model :{:0>2}:{:0>2}:{:05.2f}".format(int(hours),int(minutes),seconds))
+print(f"Training completed in {(end - start) / 60: .2f} minutes")
 
+# Save the training and validation metrics and loss history in a JSON file
+metrics_dict = {
+    'train_loss_history': train_loss_history,
+    'val_loss_history': val_loss_history,
+    'val_map_history': val_map_history,
+    'val_iou_history': val_iou_history
+}
 
-DIR_TEST = f'{DIR_INPUT}/test'
-test_df = pd.read_csv(f'{DIR_INPUT}/sample_submission.csv')
+# Save metrics
+metrics_path = SAVE_DIR / f"run_{run_id}_training_metrics.json"
+with open(metrics_path, 'w') as f:
+  json.dump(metrics_dict, f)
 
-
-labels =  targets[1]['labels'].cpu().numpy()
-model.eval()
-cpu_device = torch.device("cpu")
-
-
-test_dataset = VinBigDataset(test_df, DIR_TEST, get_test_transform(),"Test")
-
-test_data_loader = DataLoader(
-    test_dataset,
-    batch_size=8,
-    shuffle=False,
-    num_workers=1,
-    drop_last=False,
-    collate_fn=collate_fn
-)
-
-
-def format_prediction_string(labels, boxes, scores):
-    pred_strings = []
-    for j in zip(labels, scores, boxes):
-        pred_strings.append("{0} {1:.4f} {2} {3} {4} {5}".format(
-            j[0], j[1], j[2][0], j[2][1], j[2][2], j[2][3]))
-
-    return " ".join(pred_strings)
-
-
-images, image_ids = next(iter(test_data_loader))
-images = list(img.to(device) for img in images)
-
-outputs = model(images)
-outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
-
-
-boxes = outputs[0]['boxes'].cpu().detach().numpy().astype(np.int32)
-img = images[0].permute(1,2,0).cpu().detach().numpy()
-labels= outputs[0]['labels'].cpu().detach().numpy().astype(np.int32)
-score = outputs[0]['scores']
+# Save the final model
+model_path = SAVE_DIR / f"run_{run_id}_faster_rcnn_final_model.pth"
+torch.save(model.state_dict(), model_path)

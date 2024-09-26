@@ -7,11 +7,12 @@ repos:
     -   id: check-yaml
     -   id: check-added-large-files
 -   repo: https://github.com/pre-commit/mirrors-autopep8
-    rev: v1.6.0
+    rev: v1.5.7
     hooks:
     -   id: autopep8
         args: ["--in-place", "--indent-size=2", "--max-line-length=120"]
         name: autoformat
+        additional_dependencies: ['pycodestyle==2.7.0']
 -   repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.11.2
     hooks:
