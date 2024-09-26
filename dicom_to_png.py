@@ -36,5 +36,6 @@ for file in files:
     # Save the PNG image to the SAVE_DIR
     png_path: str = os.path.join(SAVE_DIR, png_filename)
     img.save(png_path)
+    print('Image saved at:', png_path)
 
 print("Conversion complete. PNG images saved at:", SAVE_DIR)
