@@ -191,7 +191,7 @@ class Dilation(ImageOnlyTransform):  # type: ignore
 # Albumentations
 def get_train_transform() -> A:
   return A.Compose([
-      A.Flip(0.5),
+      A.Flip(True),
       A.ShiftScaleRotate(scale_limit=0.1, rotate_limit=45, p=0.25),
       A.LongestMaxSize(max_size=800, p=1.0),
       Dilation(),
