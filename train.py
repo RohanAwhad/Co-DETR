@@ -167,13 +167,13 @@ device = 'cuda'
 device_type = 'cuda'
 BATCH_SIZE = 32
 NUM_EPOCHS = 10
-LR = 3e-4
-SHARD_DIR = "/scratch/rawhad/CSE507/practice_2/preprocessed_shards"
+LR = 3e-3
+SHARD_DIR = "/scratch/rawhad/CSE507/practice_2/preprocessed_shards_2"
 print('Setting up dataloaders ...')
 train_loader = VinDrCXRDataLoaderLite(SHARD_DIR, 'train', batch_size=BATCH_SIZE,
-                                      use_worker=True, prefetch_size=5, shuffle=True)
+                                      use_worker=True, prefetch_size=8, shuffle=True)
 valid_loader = VinDrCXRDataLoaderLite(SHARD_DIR, 'valid', batch_size=BATCH_SIZE,
-                                      use_worker=True, prefetch_size=5, shuffle=False)
+                                      use_worker=True, prefetch_size=8, shuffle=False)
 train_len = train_loader.shard_size * len(train_loader.files)
 valid_len = valid_loader.shard_size * len(valid_loader.files)
 
@@ -220,11 +220,11 @@ for epoch in range(NUM_EPOCHS):
     optimizer.zero_grad()
     with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
       loss_dict = model(images, targets)
-      losses = sum(loss for loss in loss_dict.values())
-      losses.backward()
+      loss = loss_dict['loss_classifier'] + loss_dict['loss_box_reg'] + loss_dict['loss_objectness'] + loss_dict['loss_rpn_box_reg']
+    loss.backward()
     optimizer.step()
-    epoch_loss.append(losses.item())
-    pbar.set_postfix({'Loss': losses.item()})
+    epoch_loss.append(loss.item())
+    pbar.set_postfix({'Loss': loss.item()})
     pbar.update()
   pbar.close()
   train_loss_history.append(sum(epoch_loss)/len(epoch_loss))
