@@ -12,7 +12,7 @@ from typing import Tuple, List
 
 def preprocess_dicom(image_path_list: list[str]) -> np.ndarray:
   images_list: list[np.array] = []
-  for image_path in image_path_list:
+  for image_path in tqdm(image_path_list, desc='Processing'):
     dicom = pydicom.dcmread(image_path)
     image = dicom.pixel_array
 
