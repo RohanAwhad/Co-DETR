@@ -46,17 +46,17 @@ DIR_TRAIN = f'{DIR_INPUT}/train'
 DIR_TEST = f'{DIR_INPUT}/test'
 
 
-train_df = pd.read_csv(f'{DIR_INPUT}/train.csv')
-train_df.fillna(0, inplace=True)
-train_df.loc[train_df["class_id"] == 14, ['x_max', 'y_max']] = 1.0  # TODO: undertstand why?
+df = pd.read_csv(f'{DIR_INPUT}/train.csv')
+df.fillna(0, inplace=True)
+df.loc[df["class_id"] == 14, ['x_max', 'y_max']] = 1.0  # TODO: undertstand why?
 
 # FasterRCNN handles class_id==0 as the background, but we have 14 as our class label for background .
-train_df["class_id"] = train_df["class_id"] + 1
-train_df.loc[train_df["class_id"] == 15, ["class_id"]] = 0
+df["class_id"] = df["class_id"] + 1
+df.loc[df["class_id"] == 15, ["class_id"]] = 0
 
-print("df Shape: "+str(train_df.shape))
-print("No Of Classes: "+str(train_df["class_id"].nunique()))
-train_df.sort_values(by='image_id').head(10)  # TODO: is it being shuffled later?
+print("df Shape: "+str(df.shape))
+print("No Of Classes: "+str(df["class_id"].nunique()))
+df.sort_values(by='image_id').head(10)  # TODO: is it being shuffled later?
 
 
 def label_to_name(id: int) -> str:
@@ -79,13 +79,13 @@ def label_to_name(id: int) -> str:
   return labels.get(id - 1, str(id))
 
 
-image_ids: np.ndarray = train_df['image_id'].unique()
+image_ids: np.ndarray = df['image_id'].unique()
 np.random.shuffle(image_ids)  # Shuffle the image IDs
 TRAIN_SIZE = int(0.8*len(image_ids))
 train_ids: np.ndarray = image_ids[:TRAIN_SIZE]  # Training split
 valid_ids: np.ndarray = image_ids[TRAIN_SIZE:]  # Validation split
-train_df = train_df[train_df['image_id'].isin(train_ids)]
-valid_df = train_df[train_df['image_id'].isin(valid_ids)]
+train_df = df[df['image_id'].isin(train_ids)]
+valid_df = df[df['image_id'].isin(valid_ids)]
 print('Num of training samples:', len(train_df))
 print('Num of validation samples:', len(valid_df))
 
