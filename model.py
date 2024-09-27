@@ -191,10 +191,10 @@ class Dilation(ImageOnlyTransform):  # type: ignore
 # Albumentations
 def get_train_transform() -> A:
   return A.Compose([
-      A.Flip(True),
-      A.ShiftScaleRotate(scale_limit=0.1, rotate_limit=45, p=0.25),
-      A.LongestMaxSize(max_size=800, p=1.0),
-      Dilation(),
+      #A.Flip(True),
+      #A.ShiftScaleRotate(scale_limit=0.1, rotate_limit=45, p=0.25),
+      #A.LongestMaxSize(max_size=800, p=1.0),
+      #Dilation(),
       # FasterRCNN will normalize.
       A.Normalize(mean=(0, 0, 0), std=(1, 1, 1), max_pixel_value=255.0, p=1.0),
       ToTensorV2(p=1.0)
