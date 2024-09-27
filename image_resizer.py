@@ -62,7 +62,7 @@ def get_all_files(directory: str) -> list[str]:
 
 
 def get_shard_metadata(directory: str) -> dict[str, list[str]]:
-  with open(os.path.join(directory, 'shards_metdata.json'), 'r') as f:
+  with open(os.path.join(directory, 'shards_metadata.json'), 'r') as f:
     return json.load(f)
 
 
