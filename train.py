@@ -108,9 +108,10 @@ class VinDrCXRDataLoaderLite():
 
     targets: list[dict[str, torch.Tensor]] = []
     image_ids = self.metadata_json[self.files[self.curr_file_ptr]][self.curr_idx: self.curr_idx + self.step]
-    for id_ in image_ids:
+    for img, id_ in zip(images, image_ids):
+      h, w = img.shape[-2:]
       records = self.df[self.df['image_id'] == id_]
-      boxes = torch.from_numpy(records[['x_min', 'y_min', 'x_max', 'y_max']].values)
+      boxes = torch.from_numpy(records[['x_min', 'y_min', 'x_max', 'y_max']].values * np.array([w, h, w, h]))
       labels = torch.tensor(records["class_id"].values, dtype=torch.int64)
       targets.append(dict(boxes=boxes, labels=labels))
     return (images, targets)
