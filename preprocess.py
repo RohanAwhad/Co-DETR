@@ -12,7 +12,7 @@ from typing import Tuple, List
 
 def preprocess_dicom(image_path_list: list[str]) -> np.ndarray:
   images_list: list[np.array] = []
-  for image_path in tqdm(image_path_list, desc='Processing'):
+  for image_path in tqdm(image_path_list, desc='Processing', leave=False):
     dicom = pydicom.dcmread(image_path)
     image = dicom.pixel_array
 
@@ -43,14 +43,15 @@ def preprocess_images(image_paths: list[str], output_dir: str, shard_size: int =
   shard: list[np.ndarray] = []
   image_ids: list[str] = []
 
-  n_procs = 8 - 2  # 8 vcpus 2 free so that no deadlock
+  n_procs = 2
   print(f"Using {n_procs} processes")
 
   with mp.Pool(n_procs) as pool:
-    chunksize = 100
+    chunksize = 50
     for img_paths, imgs in tqdm(pool.imap_unordered(preprocess_dicom, [image_paths[i:i+chunksize] for i in range(0, len(image_paths), chunksize)], chunksize=1), total=1+(len(image_paths)//chunksize)):
       shard.extend(imgs)
       image_ids.extend([os.path.splitext(os.path.basename(x))[0] for x in img_paths])
+      print(len(shard))
 
       if len(shard) == shard_size:
         shards.append(save_shard(shard, image_ids, len(shards), output_dir))
