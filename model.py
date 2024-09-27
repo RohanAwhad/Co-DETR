@@ -1,6 +1,7 @@
 # Implementation: https://www.kaggle.com/code/chekoduadarsh/pytorch-beginner-code-faster-rcnn
 # Modified slightly for my usecase
 
+from torchvision import transforms as T
 from pathlib import Path
 import sys
 from typing import Optional, Union, Any
@@ -38,6 +39,7 @@ import random
 paddingSize = 0
 
 warnings.filterwarnings("ignore")
+torch.set_float32_matmul_precision('high')
 
 
 SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/finetuning")
@@ -159,7 +161,7 @@ class VinBigDataset(Dataset):  # type: ignore
 
     else:
       if self.transforms:
-        image = self.transforms(**sample)
+        image = self.transforms(image)
       return image, image_id
 
   def __len__(self) -> int:
@@ -175,31 +177,31 @@ def dilation(img: np.array) -> np.array:  # custom image processing function
 class Dilation(ImageOnlyTransform):  # type: ignore
   def apply(self, img: np.array, **params) -> np.array: return dilation(img)  # type: ignore
 
-import torch
-from torchvision import transforms as T
 
 def get_train_transform():
-    return T.Compose([
-        #T.RandomHorizontalFlip(p=0.5),
-        #T.RandomVerticalFlip(p=0.5),
-        #T.RandomRotation(degrees=45),
-        #T.RandomResizedCrop(size=800, scale=(0.9, 1.1)),
-        T.ToTensor(),
-        # FasterRCNN will normalize.
-        T.Normalize(mean=[0, 0, 0], std=[1, 1, 1])
-    ])
+  return T.Compose([
+      # T.RandomHorizontalFlip(p=0.5),
+      # T.RandomVerticalFlip(p=0.5),
+      # T.RandomRotation(degrees=45),
+      #T.RandomResizedCrop(size=800, scale=(0.9, 1.1)),
+      T.ToTensor(),
+      # FasterRCNN will normalize.
+      T.Normalize(mean=[0, 0, 0], std=[1, 1, 1])
+  ])
+
 
 def get_valid_transform():
-    return T.Compose([
-        T.ToTensor(),
-        T.Normalize(mean=[0, 0, 0], std=[1, 1, 1])
-    ])
+  return T.Compose([
+      T.ToTensor(),
+      T.Normalize(mean=[0, 0, 0], std=[1, 1, 1])
+  ])
+
 
 def get_test_transform():
-    return T.Compose([
-        T.ToTensor(),
-        T.Normalize(mean=[0, 0, 0], std=[1, 1, 1])
-    ])
+  return T.Compose([
+      T.ToTensor(),
+      T.Normalize(mean=[0, 0, 0], std=[1, 1, 1])
+  ])
 
 
 # ===
@@ -230,7 +232,7 @@ indices = torch.randperm(len(train_dataset)).tolist()
 # Create train and validate data loader
 train_data_loader = DataLoader(
     train_dataset,
-    batch_size=8,
+    batch_size=32,
     shuffle=True,
     num_workers=4,
     collate_fn=collate_fn
@@ -238,11 +240,12 @@ train_data_loader = DataLoader(
 
 valid_data_loader = DataLoader(
     valid_dataset,
-    batch_size=8,
+    batch_size=32,
     shuffle=False,
     num_workers=4,
     collate_fn=collate_fn
 )
+
 
 class Averager:
   def __init__(self) -> None:
@@ -271,6 +274,7 @@ optimizer = torch.optim.SGD(params, lr=0.005, momentum=0.9, weight_decay=0.0005)
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.1)
 
 num_epochs = 2  # Low epoch to save GPU time
+device_type = 'cuda'
 
 
 # Validation function
@@ -281,7 +285,8 @@ def validate_model(model: torch.nn.Module, valid_data_loader: DataLoader) -> tup
     for images, targets, image_ids in tqdm(valid_data_loader, total=len(valid_data_loader), desc='Eval'):
       images = list(image.to(device) for image in images)
       targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-      outputs = model(images)
+      with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+        outputs = model(images)
       val_metric.update(outputs, targets)
   eval_metrics = val_metric.compute()
   val_map = eval_metrics['map'].item()
@@ -312,15 +317,13 @@ for epoch in range(num_epochs):
     images = list(image.to(device) for image in images)
     targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-    loss_dict = model(images, targets)
-
-    losses = sum(loss for loss in loss_dict.values())
-    loss_value = losses.item()
-    loss_hist.send(loss_value)
-
     optimizer.zero_grad()
-    losses.backward()
+    with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+      loss_dict = model(images, targets)
+      losses = sum(loss for loss in loss_dict.values())
+      losses.backward()
     optimizer.step()
+    loss_hist.send(losses.item())
 
   # Save the training metrics
   train_loss_history.append(loss_hist.value)
