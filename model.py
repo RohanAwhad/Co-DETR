@@ -14,7 +14,9 @@ import pydicom
 import time
 import warnings
 
+from tqdm import tqdm
 from PIL import Image
+
 
 import albumentations as A
 from albumentations.pytorch.transforms import ToTensorV2
@@ -242,12 +244,6 @@ valid_data_loader = DataLoader(
     collate_fn=collate_fn
 )
 
-# Train dataset sample
-images, targets, image_ids = next(iter(train_data_loader))
-images = list(image.to(device) for image in images)
-targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-
 class Averager:
   def __init__(self) -> None:
     self.current_total = 0.0
@@ -282,7 +278,7 @@ def validate_model(model: torch.nn.Module, valid_data_loader: DataLoader) -> tup
   model.eval()
   val_metric = MeanAveragePrecision()
   with torch.no_grad():
-    for images, targets, image_ids in valid_data_loader:
+    for images, targets, image_ids in tqdm(valid_data_loader, total=len(valid_data_loader), desc='Eval'):
       images = list(image.to(device) for image in images)
       targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
       outputs = model(images)
@@ -312,7 +308,7 @@ for epoch in range(num_epochs):
   model.train()
   loss_hist.reset()
 
-  for images, targets, image_ids in train_data_loader:
+  for images, targets, image_ids in tqdm(train_data_loader, total=len(train_data_loader), desc='Training'):
     images = list(image.to(device) for image in images)
     targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
