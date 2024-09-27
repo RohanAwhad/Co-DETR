@@ -130,7 +130,7 @@ class VinBigDataset(Dataset):  # type: ignore
       if records.loc[0, "class_id"] == 0:
         records = records.loc[[0], :]
 
-      boxes = records[['x_min', 'y_min', 'x_max', 'y_max']].values
+      boxes = torch.from_numpy(records[['x_min', 'y_min', 'x_max', 'y_max']].values)
       area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
       area = torch.as_tensor(area, dtype=torch.float32)
       labels = torch.tensor(records["class_id"].values, dtype=torch.int64)
