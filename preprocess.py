@@ -37,21 +37,20 @@ def save_shard(shard: List[np.ndarray], image_ids: List[str], shard_id: int, sha
   return image_ids, shard_path
 
 
-def preprocess_images(image_paths: list[str], output_dir: str, shard_size: int = 1000) -> None:
+def preprocess_images(image_paths: list[str], output_dir: str, shard_size: int = 160) -> None:
   os.makedirs(output_dir, exist_ok=True)
   shards: list[tuple[list[str], str]] = []
   shard: list[np.ndarray] = []
   image_ids: list[str] = []
 
-  n_procs = 2
+  n_procs = 4
   print(f"Using {n_procs} processes")
 
   with mp.Pool(n_procs) as pool:
-    chunksize = 50
+    chunksize = 10
     for img_paths, imgs in tqdm(pool.imap_unordered(preprocess_dicom, [image_paths[i:i+chunksize] for i in range(0, len(image_paths), chunksize)], chunksize=1), total=1+(len(image_paths)//chunksize)):
       shard.extend(imgs)
       image_ids.extend([os.path.splitext(os.path.basename(x))[0] for x in img_paths])
-      print(len(shard))
 
       if len(shard) == shard_size:
         shards.append(save_shard(shard, image_ids, len(shards), output_dir))
@@ -77,5 +76,5 @@ if __name__ == '__main__':
   TRAIN_SIZE = int(0.8*len(image_paths))
   train_paths: list[str] = image_paths[:TRAIN_SIZE]  # Training split
   valid_paths: list[str] = image_paths[TRAIN_SIZE:]  # Validation split
-  preprocess_images(train_paths, OUTPUT_DIR+'/train_ds', shard_size=1000)
-  preprocess_images(valid_paths, OUTPUT_DIR+'/valid_ds', shard_size=1000)
+  preprocess_images(train_paths, OUTPUT_DIR+'/train_ds', shard_size=160)
+  preprocess_images(valid_paths, OUTPUT_DIR+'/valid_ds', shard_size=160)

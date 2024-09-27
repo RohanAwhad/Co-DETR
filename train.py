@@ -29,6 +29,7 @@ warnings.filterwarnings("ignore")
 
 torch.set_float32_matmul_precision('high')
 SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/finetuning")
+os.makedirs(SAVE_DIR, exist_ok=True)
 run_id = sys.argv[1]
 
 
@@ -57,7 +58,6 @@ class VinDrCXRDataLoaderLite():
     self.root = root
     self.batch_size = batch_size
     self.split = split
-    self.shard_size = self._get_shard_size()
     self.curr_file_ptr = None
     self.shuffle = shuffle
     # labels
@@ -69,7 +69,7 @@ class VinDrCXRDataLoaderLite():
     self.df.loc[self.df["class_id"] == 15, ["class_id"]] = 0
     # metadata
     self.files = glob.glob(os.path.join(root, f'{split}_ds', f'shard_*.pkl'))
-    with open(os.path.join(root, f'{split}_ds', f'shard_metadata.json'), 'r') as f:
+    with open(os.path.join(root, f'{split}_ds', f'shards_metadata.json'), 'r') as f:
       self.metadata_json = json.load(f)
     # multiprocessing
     self.use_worker = use_worker
@@ -78,6 +78,7 @@ class VinDrCXRDataLoaderLite():
     self.prefetch_thread = None
     self.offset = 0
     self.step = self.batch_size
+    self.shard_size = self._get_shard_size()
     assert self.step <= self.shard_size, "Batch size * world size must be less than or equal to shard size"
     self.reset()
 
@@ -95,7 +96,7 @@ class VinDrCXRDataLoaderLite():
       return pickle.load(f)
 
   def _next_batch(self):
-    images: list[torch.Tensor] = [torch.from_numpy(x) for x in self.curr_shard[self.curr_idx:self.curr_idx+self.step]]
+    images: list[torch.Tensor] = [torch.from_numpy(x).permute(2, 0, 1).float() for x in self.curr_shard[self.curr_idx:self.curr_idx+self.step]]
     self.curr_idx += self.step
     # drop last batch if it's smaller than batch_size
     if (self.curr_idx + self.step) >= len(self.curr_shard):
@@ -167,11 +168,11 @@ BATCH_SIZE = 32
 NUM_EPOCHS = 10
 LR = 3e-4
 SHARD_DIR = "/scratch/rawhad/CSE507/practice_2/preprocessed_shards"
-
+print('Setting up dataloaders ...')
 train_loader = VinDrCXRDataLoaderLite(SHARD_DIR, 'train', batch_size=BATCH_SIZE,
-                                      use_worker=True, prefetch_size=2, shuffle=True)
+                                      use_worker=True, prefetch_size=5, shuffle=True)
 valid_loader = VinDrCXRDataLoaderLite(SHARD_DIR, 'valid', batch_size=BATCH_SIZE,
-                                      use_worker=True, prefetch_size=2, shuffle=False)
+                                      use_worker=True, prefetch_size=5, shuffle=False)
 train_len = train_loader.shard_size * len(train_loader.files)
 valid_len = valid_loader.shard_size * len(valid_loader.files)
 
@@ -194,7 +195,8 @@ for epoch in range(NUM_EPOCHS):
   model.eval()
   val_metric = MeanAveragePrecision()
   with torch.no_grad():
-    for _ in range(valid_len // BATCH_SIZE):
+    for _ in tqdm(range(valid_len // BATCH_SIZE), desc=f'Evaluating | Epoch {epoch}'):
+      images, targets = valid_loader.next_batch()
       images = [image.to(device) for image in images]
       targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -204,10 +206,14 @@ for epoch in range(NUM_EPOCHS):
   eval_metrics = val_metric.compute()
   val_map_history.append(eval_metrics['map'].item())
   val_iou_history.append(eval_metrics['map_50'].item())
+  print(f"Val mAP: {val_map_history[-1]: .4f}, Val IoU: {val_iou_history[-1]: .4f}")
   # train
   model.train()
   epoch_loss = []
-  for _ in range(train_len // BATCH_SIZE):
+  train_steps = train_len // BATCH_SIZE
+  pbar = tqdm(total=train_steps, desc=f'Training | Epoch {epoch}')
+  for _ in range(train_steps):
+    images, targets = train_loader.next_batch()
     images = [image.to(device) for image in images]
     targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
     optimizer.zero_grad()
@@ -217,10 +223,12 @@ for epoch in range(NUM_EPOCHS):
       losses.backward()
     optimizer.step()
     epoch_loss.append(losses.item())
+    pbar.set_postfix({'Loss': losses.item()})
+    pbar.update()
+  pbar.close()
   train_loss_history.append(sum(epoch_loss)/len(epoch_loss))
   # log
   print(f"Train Loss: {train_loss_history[-1]: .4f}")
-  print(f"Val mAP: {val_map_history[-1]: .4f}, Val IoU: {val_iou_history[-1]: .4f}")
 
 torch.save(model.state_dict(), os.path.join(SAVE_DIR, f'run_{run_id}_trained_model.pth'))
 with open(os.path.join(SAVE_DIR, f'run_{run_id}_train_history.json'), 'w') as f:
