@@ -278,34 +278,24 @@ num_epochs = 2  # Low epoch to save GPU time
 
 
 # Validation function
-def validate_model(model: torch.nn.Module, valid_data_loader: DataLoader) -> tuple[float, float, float]:
+def validate_model(model: torch.nn.Module, valid_data_loader: DataLoader) -> tuple[float, float]:
   model.eval()
-  val_loss_hist = Averager()
   val_metric = MeanAveragePrecision()
-
   with torch.no_grad():
     for images, targets, image_ids in valid_data_loader:
       images = list(image.to(device) for image in images)
       targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-      loss_dict = model(images, targets)
       outputs = model(images)
       val_metric.update(outputs, targets)
-
-      losses = sum(loss for loss in loss_dict.values())
-      loss_value = losses.item()
-      val_loss_hist.send(loss_value)
-
   eval_metrics = val_metric.compute()
   val_map = eval_metrics['map'].item()
   val_iou = eval_metrics['map_50'].item()
 
-  return val_loss_hist.value, val_map, val_iou
+  return val_map, val_iou
 
 
 loss_hist = Averager()
 train_loss_history = []
-val_loss_history = []
 val_map_history = []
 val_iou_history = []
 start = time.time()
@@ -314,8 +304,7 @@ for epoch in range(num_epochs):
   print(f"Epoch {epoch+1}/{num_epochs}")
 
   # Validate model at the start of each epoch
-  val_loss, val_map, val_iou = validate_model(model, valid_data_loader)
-  val_loss_history.append(val_loss)
+  val_map, val_iou = validate_model(model, valid_data_loader)
   val_map_history.append(val_map)
   val_iou_history.append(val_iou)
 
@@ -345,7 +334,7 @@ for epoch in range(num_epochs):
     lr_scheduler.step()
 
   print(f"Train Loss: {loss_hist.value: .4f}")
-  print(f"Val Loss: {val_loss: .4f}, Val mAP: {val_map: .4f}, Val IoU: {val_iou: .4f}")
+  print(f"Val mAP: {val_map: .4f}, Val IoU: {val_iou: .4f}")
 
 end = time.time()
 print(f"Training completed in {(end - start) / 60: .2f} minutes")
@@ -353,7 +342,6 @@ print(f"Training completed in {(end - start) / 60: .2f} minutes")
 # Save the training and validation metrics and loss history in a JSON file
 metrics_dict = {
     'train_loss_history': train_loss_history,
-    'val_loss_history': val_loss_history,
     'val_map_history': val_map_history,
     'val_iou_history': val_iou_history
 }
