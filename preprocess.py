@@ -43,7 +43,7 @@ def preprocess_images(image_paths: list[str], output_dir: str, shard_size: int =
   shard: list[np.ndarray] = []
   image_ids: list[str] = []
 
-  n_procs = 8
+  n_procs = 8 - 2  # 8 vcpus 2 free so that no deadlock
   print(f"Using {n_procs} processes")
 
   with mp.Pool(n_procs) as pool:
