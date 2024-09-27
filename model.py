@@ -146,16 +146,7 @@ class VinBigDataset(Dataset):  # type: ignore
       target['iscrowd'] = iscrowd
 
       if self.transforms:
-        sample = {
-            'image': image,
-            'bboxes': target['boxes'],
-            'labels': labels
-        }
-        sample = self.transforms(**sample)
-        image = sample['image']
-
-        target['boxes'] = torch.tensor(sample['bboxes'])
-
+        image = self.transforms(image)
       if target["boxes"].shape[0] == 0:
         # Albumentation cuts the target (class 14, 1x1px in the corner)
         target["boxes"] = torch.from_numpy(np.array([[0.0, 0.0, 1.0, 1.0]]))
@@ -166,12 +157,7 @@ class VinBigDataset(Dataset):  # type: ignore
 
     else:
       if self.transforms:
-        sample = {
-            'image': image,
-        }
-        sample = self.transforms(**sample)
-        image = sample['image']
-
+        image = self.transforms(**sample)
       return image, image_id
 
   def __len__(self) -> int:
