@@ -187,32 +187,31 @@ def dilation(img: np.array) -> np.array:  # custom image processing function
 class Dilation(ImageOnlyTransform):  # type: ignore
   def apply(self, img: np.array, **params) -> np.array: return dilation(img)  # type: ignore
 
+import torch
+from torchvision import transforms as T
 
-# Albumentations
-def get_train_transform() -> A:
-  return A.Compose([
-      #A.Flip(True),
-      #A.ShiftScaleRotate(scale_limit=0.1, rotate_limit=45, p=0.25),
-      #A.LongestMaxSize(max_size=800, p=1.0),
-      #Dilation(),
-      # FasterRCNN will normalize.
-      A.Normalize(mean=(0, 0, 0), std=(1, 1, 1), max_pixel_value=255.0, p=1.0),
-      ToTensorV2(p=1.0)
-  ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
+def get_train_transform():
+    return T.Compose([
+        #T.RandomHorizontalFlip(p=0.5),
+        #T.RandomVerticalFlip(p=0.5),
+        #T.RandomRotation(degrees=45),
+        #T.RandomResizedCrop(size=800, scale=(0.9, 1.1)),
+        T.ToTensor(),
+        # FasterRCNN will normalize.
+        T.Normalize(mean=[0, 0, 0], std=[1, 1, 1])
+    ])
 
+def get_valid_transform():
+    return T.Compose([
+        T.ToTensor(),
+        T.Normalize(mean=[0, 0, 0], std=[1, 1, 1])
+    ])
 
-def get_valid_transform() -> A:
-  return A.Compose([
-      A.Normalize(mean=(0, 0, 0), std=(1, 1, 1), max_pixel_value=255.0, p=1.0),
-      ToTensorV2(p=1.0)
-  ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
-
-
-def get_test_transform() -> A:
-  return A.Compose([
-      A.Normalize(mean=(0, 0, 0), std=(1, 1, 1), max_pixel_value=255.0, p=1.0),
-      ToTensorV2(p=1.0)
-  ])
+def get_test_transform():
+    return T.Compose([
+        T.ToTensor(),
+        T.Normalize(mean=[0, 0, 0], std=[1, 1, 1])
+    ])
 
 
 # ===
