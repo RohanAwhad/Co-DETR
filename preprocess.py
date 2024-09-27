@@ -10,21 +10,24 @@ from tqdm import tqdm
 from typing import Tuple, List
 
 
-def preprocess_dicom(image_path: str) -> np.ndarray:
-  dicom = pydicom.dcmread(image_path)
-  image = dicom.pixel_array
+def preprocess_dicom(image_path_list: list[str]) -> np.ndarray:
+  images_list: list[np.array] = []
+  for image_path in image_path_list:
+    dicom = pydicom.dcmread(image_path)
+    image = dicom.pixel_array
 
-  if "PhotometricInterpretation" in dicom:
-    if dicom.PhotometricInterpretation == "MONOCHROME1":
-      image = np.amax(image) - image
+    if "PhotometricInterpretation" in dicom:
+      if dicom.PhotometricInterpretation == "MONOCHROME1":
+        image = np.amax(image) - image
 
-  slope = dicom.RescaleSlope if "RescaleSlope" in dicom else 1.0
-  intercept = dicom.RescaleIntercept if "RescaleIntercept" in dicom else 0.0
-  image = (image.astype(np.float32) * slope) + intercept
-  image = (image - image.min()) / (image.max() - image.min()) * 255
-  image = np.stack([image, image, image])
-  image = image.transpose(1, 2, 0).astype(np.uint8) / 255  # betwee [0, 1]
-  return image_path, image
+    slope = dicom.RescaleSlope if "RescaleSlope" in dicom else 1.0
+    intercept = dicom.RescaleIntercept if "RescaleIntercept" in dicom else 0.0
+    image = (image.astype(np.float32) * slope) + intercept
+    image = (image - image.min()) / (image.max() - image.min()) * 255
+    image = np.stack([image, image, image])
+    image = image.transpose(1, 2, 0).astype(np.uint8) / 255  # betwee [0, 1]
+    images_list.append(image)
+  return image_path_list, images_list
 
 
 def save_shard(shard: List[np.ndarray], image_ids: List[str], shard_id: int, shard_dir: str) -> Tuple[List[str], str]:
@@ -40,14 +43,14 @@ def preprocess_images(image_paths: list[str], output_dir: str, shard_size: int =
   shard: list[np.ndarray] = []
   image_ids: list[str] = []
 
-  n_procs = max(1, os.cpu_count() // 2)
+  n_procs = 8
   print(f"Using {n_procs} processes")
 
   with mp.Pool(n_procs) as pool:
     chunksize = 100
-    for img_path, img in tqdm(pool.imap_unordered(preprocess_dicom, image_paths, chunksize=chunksize), total=len(image_paths)):
-      shard.append(img)
-      image_ids.append(os.path.splitext(os.path.basename(img_path))[0])
+    for img_paths, imgs in tqdm(pool.imap_unordered(preprocess_dicom, [image_paths[i:i+chunksize] for i in range(0, len(image_paths), chunksize)], chunksize=1), total=1+(len(image_paths)//chunksize)):
+      shard.extend(imgs)
+      image_ids.extend([os.path.splitext(os.path.basename(x))[0] for x in img_paths])
 
       if len(shard) == shard_size:
         shards.append(save_shard(shard, image_ids, len(shards), output_dir))
