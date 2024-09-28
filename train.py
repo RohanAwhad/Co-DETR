@@ -28,10 +28,13 @@ warnings.filterwarnings("ignore")
 
 
 torch.set_float32_matmul_precision('high')
-SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/finetuning")
-os.makedirs(SAVE_DIR, exist_ok=True)
 run_id = sys.argv[1]
 pretrained = True if len(sys.argv) > 2 and sys.argv[2] == 'pretrained' else False
+if pretrained:
+    SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/finetuning")
+else:
+    SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/full_model")
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 
 def label_to_name(id: int) -> str:
@@ -163,13 +166,18 @@ class VinDrCXRDataLoaderLite():
       time.sleep(0.25)
     return self.prefetch_queue.get()
 
+  def del_(self):
+      if len(self.workers) > 0:
+        for worker in self.workers:
+          worker.terminate()
+          worker.close()
 
 # Usage
 device = 'cuda'
 device_type = 'cuda'
 BATCH_SIZE = 32
-NUM_EPOCHS = 10
-LR = 3e-5
+NUM_EPOCHS = 2
+LR = 3e-4
 SHARD_DIR = "/scratch/rawhad/CSE507/practice_2/preprocessed_shards_2"
 print('Setting up dataloaders ...')
 train_loader = VinDrCXRDataLoaderLite(SHARD_DIR, 'train', batch_size=BATCH_SIZE,
@@ -205,7 +213,9 @@ for epoch in range(NUM_EPOCHS):
       with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         outputs = model(images)
       val_metric.update(outputs, targets)
+      break # TODO: remove this
   eval_metrics = val_metric.compute()
+  with open('eval_metrics.json', 'r') as f:json.dump(eval_metrics, f) # TODO: remove this
   val_map_history.append(eval_metrics['map'].item())
   print(f"Val mAP @ IoU > 0.4: {val_map_history[-1]: .4f}")
   # train
@@ -225,12 +235,31 @@ for epoch in range(NUM_EPOCHS):
     loss.backward()
     optimizer.step()
     epoch_loss.append(loss.item())
-    pbar.set_postfix({'Loss': loss.item()})
+    pbar.set_postfix({'Loss': sum(epoch_loss)/len(epoch_loss)})
     pbar.update()
+    break  # TODO: remove this
   pbar.close()
   train_loss_history.append(sum(epoch_loss)/len(epoch_loss))
   # log
   print(f"Train Loss: {train_loss_history[-1]: .4f}")
+  valid_loader.reset()
+  train_loader.reset()
+
+# final val
+model.eval()
+val_metric = MeanAveragePrecision(iou_thresholds=[0.4])
+with torch.no_grad():
+  for _ in tqdm(range(valid_len // BATCH_SIZE), desc=f'Evaluating | Epoch {epoch}'):
+    images, targets = valid_loader.next_batch()
+    images = [image.to(device) for image in images]
+    targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+    with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+      outputs = model(images)
+    val_metric.update(outputs, targets)
+eval_metrics = val_metric.compute()
+val_map_history.append(eval_metrics['map'].item())
+print(f"Final Val mAP @ IoU > 0.4: {val_map_history[-1]: .4f}")
 
 torch.save(model.state_dict(), os.path.join(SAVE_DIR, f'run_{run_id}_trained_model.pth'))
 with open(os.path.join(SAVE_DIR, f'run_{run_id}_train_history.json'), 'w') as f:
@@ -238,3 +267,8 @@ with open(os.path.join(SAVE_DIR, f'run_{run_id}_train_history.json'), 'w') as f:
       'train_loss': train_loss_history,
       'val_map': val_map_history,
   }, f)
+
+print('Saved results')
+
+valid_loader.del_()
+train_loader.del_()
