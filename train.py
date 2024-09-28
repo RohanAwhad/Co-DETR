@@ -24,16 +24,28 @@ import sys
 import threading
 import time
 import warnings
+import argparse
+
 warnings.filterwarnings("ignore")
-
-
 torch.set_float32_matmul_precision('high')
-run_id = sys.argv[1]
-pretrained = True if len(sys.argv) > 2 and sys.argv[2] == 'pretrained' else False
+
+parser = argparse.ArgumentParser(description='Process command line arguments.')
+parser.add_argument('run_id', type=str, help='The run ID')
+parser.add_argument('--pretrained', action='store_true', help='Use pretrained model')
+parser.add_argument('--lr', type=float, help='learning rate')
+parser.add_argument('--num_epochs', type=int, help='learning rate')
+args = parser.parse_args()
+
+run_id: str = args.run_id
+pretrained: bool = args.pretrained
+LR: float = args.lr
+NUM_EPOCHS: int = args.num_epochs
+
+
 if pretrained:
-    SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/finetuning")
+  SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/finetuning")
 else:
-    SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/full_model")
+  SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/full_model")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 
@@ -167,17 +179,16 @@ class VinDrCXRDataLoaderLite():
     return self.prefetch_queue.get()
 
   def del_(self):
-      if len(self.workers) > 0:
-        for worker in self.workers:
-          worker.terminate()
-          worker.close()
+    if len(self.workers) > 0:
+      for worker in self.workers:
+        worker.terminate()
+        worker.close()
+
 
 # Usage
 device = 'cuda'
 device_type = 'cuda'
 BATCH_SIZE = 32
-NUM_EPOCHS = 2
-LR = 3e-4
 SHARD_DIR = "/scratch/rawhad/CSE507/practice_2/preprocessed_shards_2"
 print('Setting up dataloaders ...')
 train_loader = VinDrCXRDataLoaderLite(SHARD_DIR, 'train', batch_size=BATCH_SIZE,
@@ -213,9 +224,10 @@ for epoch in range(NUM_EPOCHS):
       with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         outputs = model(images)
       val_metric.update(outputs, targets)
-      break # TODO: remove this
+      break  # TODO: remove this
   eval_metrics = val_metric.compute()
-  with open('eval_metrics.json', 'r') as f:json.dump(eval_metrics, f) # TODO: remove this
+  with open('eval_metrics.json', 'r') as f:
+    json.dump(eval_metrics, f)  # TODO: remove this
   val_map_history.append(eval_metrics['map'].item())
   print(f"Val mAP @ IoU > 0.4: {val_map_history[-1]: .4f}")
   # train
