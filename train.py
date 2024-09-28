@@ -31,6 +31,7 @@ torch.set_float32_matmul_precision('high')
 SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/finetuning")
 os.makedirs(SAVE_DIR, exist_ok=True)
 run_id = sys.argv[1]
+pretrained = True if len(sys.argv) > 2 and sys.argv[2] == 'pretrained' else False
 
 
 def label_to_name(id: int) -> str:
@@ -67,7 +68,6 @@ class VinDrCXRDataLoaderLite():
     # FasterRCNN handles class_id==0 as the background, but we have 14 as our class label for background .
     self.df["class_id"] = self.df["class_id"] + 1
     self.df.loc[self.df["class_id"] == 15, ["class_id"]] = 0
-    print(self.df.head())
     # metadata
     self.files = glob.glob(os.path.join(root, f'{split}_ds', f'shard_*.pkl'))
     with open(os.path.join(root, f'{split}_ds', f'shards_metadata.json'), 'r') as f:
@@ -114,7 +114,6 @@ class VinDrCXRDataLoaderLite():
       h, w = img.shape[-2:]
       records = self.df[self.df['image_id'] == id_]
       boxes = torch.from_numpy(records[['x_min', 'y_min', 'x_max', 'y_max']].values * np.array([w, h, w, h]))
-      print('Bboxes:', boxes)
       labels = torch.tensor(records["class_id"].values, dtype=torch.int64)
       targets.append(dict(boxes=boxes, labels=labels))
     return (images, targets)
@@ -181,7 +180,7 @@ train_len = train_loader.shard_size * len(train_loader.files)
 valid_len = valid_loader.shard_size * len(valid_loader.files)
 
 # setup model
-model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
+model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=pretrained)
 # change the head
 num_classes = 15  # 14 Classes + 1 background
 in_features = model.roi_heads.box_predictor.cls_score.in_features
