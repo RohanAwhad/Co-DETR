@@ -28,24 +28,33 @@ import argparse
 
 warnings.filterwarnings("ignore")
 torch.set_float32_matmul_precision('high')
+torch.backends.cudnn.deterministic = True
 
 parser = argparse.ArgumentParser(description='Process command line arguments.')
 parser.add_argument('run_id', type=str, help='The run ID')
 parser.add_argument('--pretrained', action='store_true', help='Use pretrained model')
 parser.add_argument('--lr', type=float, help='learning rate')
-parser.add_argument('--num_epochs', type=int, help='learning rate')
+parser.add_argument('--num_epochs', type=int, help='num of epochs')
+parser.add_argument('--batch_size', type=int, help='batch size')
+parser.add_argument('--prefetch_size', type=int, help='prefetch size')
 args = parser.parse_args()
 
 run_id: str = args.run_id
 pretrained: bool = args.pretrained
+BATCH_SIZE: int = args.batch_size
 LR: float = args.lr
 NUM_EPOCHS: int = args.num_epochs
+PREFETCH_SIZE: int = args.prefetch_size
 
 
 if pretrained:
   SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/finetuning")
+  weights = torchvision.models.detection.FasterRCNN_ResNet50_FPN_Weights
+  weights_backbone = torchvision.models.resnet.ResNet50_Weights
 else:
   SAVE_DIR = Path("/scratch/rawhad/CSE507/practice_2/models/full_model")
+  weights = None
+  weights_backbone = None
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 
@@ -188,18 +197,17 @@ class VinDrCXRDataLoaderLite():
 # Usage
 device = 'cuda'
 device_type = 'cuda'
-BATCH_SIZE = 32
 SHARD_DIR = "/scratch/rawhad/CSE507/practice_2/preprocessed_shards_2"
 print('Setting up dataloaders ...')
 train_loader = VinDrCXRDataLoaderLite(SHARD_DIR, 'train', batch_size=BATCH_SIZE,
-                                      use_worker=True, prefetch_size=8, shuffle=True)
+                                      use_worker=True, prefetch_size=PREFETCH_SIZE, shuffle=True)
 valid_loader = VinDrCXRDataLoaderLite(SHARD_DIR, 'valid', batch_size=BATCH_SIZE,
-                                      use_worker=True, prefetch_size=8, shuffle=False)
+                                      use_worker=True, prefetch_size=PREFETCH_SIZE, shuffle=False)
 train_len = train_loader.shard_size * len(train_loader.files)
 valid_len = valid_loader.shard_size * len(valid_loader.files)
 
 # setup model
-model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=pretrained)
+model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights=weights, weights_backbone=weights_backbone)
 # change the head
 num_classes = 15  # 14 Classes + 1 background
 in_features = model.roi_heads.box_predictor.cls_score.in_features
@@ -224,10 +232,7 @@ for epoch in range(NUM_EPOCHS):
       with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         outputs = model(images)
       val_metric.update(outputs, targets)
-      break  # TODO: remove this
   eval_metrics = val_metric.compute()
-  with open('eval_metrics.json', 'r') as f:
-    json.dump(eval_metrics, f)  # TODO: remove this
   val_map_history.append(eval_metrics['map'].item())
   print(f"Val mAP @ IoU > 0.4: {val_map_history[-1]: .4f}")
   # train
@@ -249,13 +254,10 @@ for epoch in range(NUM_EPOCHS):
     epoch_loss.append(loss.item())
     pbar.set_postfix({'Loss': sum(epoch_loss)/len(epoch_loss)})
     pbar.update()
-    break  # TODO: remove this
   pbar.close()
   train_loss_history.append(sum(epoch_loss)/len(epoch_loss))
   # log
   print(f"Train Loss: {train_loss_history[-1]: .4f}")
-  valid_loader.reset()
-  train_loader.reset()
 
 # final val
 model.eval()
