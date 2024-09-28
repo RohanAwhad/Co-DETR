@@ -32,9 +32,9 @@ def main() -> None:
       shard: list[np.ndarray] = pickle.load(f)
     for img, img_id in zip(shard, shards_metadata[shard_file]):
       h, w = img.shape[:2]
-      records = df[df['image_id'] == img_id]
-      records[['x_min', 'x_max']] = records[['x_min', 'x_max']] / w
-      records[['y_min', 'y_max']] = records[['y_min', 'y_max']] / h
+      row_ids = df['image_id'] == img_id
+      df.loc[row_ids, ('x_min', 'x_max')] /= w
+      df.loc[row_ids, ('y_min', 'y_max')] /= h
       resized_imgs_list.append(cv2.resize(img, (512, 512)))
     save_shard(resized_imgs_list, os.path.join(NEW_TRAIN_SHARDS_DIR, os.path.basename(shard_file)))
   # valid shards
@@ -46,12 +46,12 @@ def main() -> None:
       shard: list[np.ndarray] = pickle.load(f)
     for img, img_id in zip(shard, shards_metadata[shard_file]):
       h, w = img.shape[:2]
-      records = df[df['image_id'] == img_id]
-      records[['x_min', 'x_max']] = records[['x_min', 'x_max']] / w
-      records[['y_min', 'y_max']] = records[['y_min', 'y_max']] / h
+      row_ids = df['image_id'] == img_id
+      df.loc[row_ids, ('x_min', 'x_max')] /= w
+      df.loc[row_ids, ('y_min', 'y_max')] /= h
       resized_imgs_list.append(cv2.resize(img, (512, 512)))
     save_shard(resized_imgs_list, os.path.join(NEW_VALID_SHARDS_DIR, os.path.basename(shard_file)))
-  df.to_csv(NEW_TRAIN_CSV)
+  df.to_csv(NEW_TRAIN_CSV, index=False)
 
 
 def get_all_files(directory: str) -> list[str]:

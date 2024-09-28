@@ -67,6 +67,7 @@ class VinDrCXRDataLoaderLite():
     # FasterRCNN handles class_id==0 as the background, but we have 14 as our class label for background .
     self.df["class_id"] = self.df["class_id"] + 1
     self.df.loc[self.df["class_id"] == 15, ["class_id"]] = 0
+    print(self.df.head())
     # metadata
     self.files = glob.glob(os.path.join(root, f'{split}_ds', f'shard_*.pkl'))
     with open(os.path.join(root, f'{split}_ds', f'shards_metadata.json'), 'r') as f:
@@ -112,6 +113,7 @@ class VinDrCXRDataLoaderLite():
       h, w = img.shape[-2:]
       records = self.df[self.df['image_id'] == id_]
       boxes = torch.from_numpy(records[['x_min', 'y_min', 'x_max', 'y_max']].values * np.array([w, h, w, h]))
+      print('Bboxes:', boxes)
       labels = torch.tensor(records["class_id"].values, dtype=torch.int64)
       targets.append(dict(boxes=boxes, labels=labels))
     return (images, targets)
@@ -167,7 +169,7 @@ device = 'cuda'
 device_type = 'cuda'
 BATCH_SIZE = 32
 NUM_EPOCHS = 10
-LR = 3e-3
+LR = 3e-5
 SHARD_DIR = "/scratch/rawhad/CSE507/practice_2/preprocessed_shards_2"
 print('Setting up dataloaders ...')
 train_loader = VinDrCXRDataLoaderLite(SHARD_DIR, 'train', batch_size=BATCH_SIZE,
