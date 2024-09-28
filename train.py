@@ -97,7 +97,8 @@ class VinDrCXRDataLoaderLite():
       return pickle.load(f)
 
   def _next_batch(self):
-    images: list[torch.Tensor] = [torch.from_numpy(x).permute(2, 0, 1).float() for x in self.curr_shard[self.curr_idx:self.curr_idx+self.step]]
+    images: list[torch.Tensor] = [torch.from_numpy(x).permute(2, 0, 1).float()
+                                  for x in self.curr_shard[self.curr_idx:self.curr_idx+self.step]]
     self.curr_idx += self.step
     # drop last batch if it's smaller than batch_size
     if (self.curr_idx + self.step) >= len(self.curr_shard):
@@ -191,12 +192,11 @@ optimizer = torch.optim.Adam([p for p in model.parameters() if p.requires_grad],
 # Training loop
 train_loss_history = []
 val_map_history = []
-val_iou_history = []
 for epoch in range(NUM_EPOCHS):
   print(f"Epoch {epoch+1}/{NUM_EPOCHS}")
   # eval
   model.eval()
-  val_metric = MeanAveragePrecision()
+  val_metric = MeanAveragePrecision(iou_thresholds=[0.4])
   with torch.no_grad():
     for _ in tqdm(range(valid_len // BATCH_SIZE), desc=f'Evaluating | Epoch {epoch}'):
       images, targets = valid_loader.next_batch()
@@ -208,8 +208,7 @@ for epoch in range(NUM_EPOCHS):
       val_metric.update(outputs, targets)
   eval_metrics = val_metric.compute()
   val_map_history.append(eval_metrics['map'].item())
-  val_iou_history.append(eval_metrics['map_50'].item())
-  print(f"Val mAP: {val_map_history[-1]: .4f}, Val IoU: {val_iou_history[-1]: .4f}")
+  print(f"Val mAP @ IoU > 0.4: {val_map_history[-1]: .4f}")
   # train
   model.train()
   epoch_loss = []
@@ -222,7 +221,8 @@ for epoch in range(NUM_EPOCHS):
     optimizer.zero_grad()
     with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
       loss_dict = model(images, targets)
-      loss = loss_dict['loss_classifier'] + loss_dict['loss_box_reg'] + loss_dict['loss_objectness'] + loss_dict['loss_rpn_box_reg']
+      loss = loss_dict['loss_classifier'] + loss_dict['loss_box_reg'] + \
+          loss_dict['loss_objectness'] + loss_dict['loss_rpn_box_reg']
     loss.backward()
     optimizer.step()
     epoch_loss.append(loss.item())
@@ -238,5 +238,4 @@ with open(os.path.join(SAVE_DIR, f'run_{run_id}_train_history.json'), 'w') as f:
   json.dump({
       'train_loss': train_loss_history,
       'val_map': val_map_history,
-      'val_iou': val_iou_history
   }, f)
